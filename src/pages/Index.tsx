@@ -41,9 +41,72 @@ const Index = () => {
   const warmupEndsAtRef = useRef(0);
 
   const processed = visited + written;
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    // Calculate progress
+    const handleMessage = (ev: MessageEvent) => {
+      const { type, payload } = ev.data || {};
+
+      if (type === 'startCrawl:ok') {
+        console.log('Crawl iniciado:', payload);
+      }
+
+      if (type === 'startCrawl:err') {
+        console.error('Erro ao iniciar:', payload);
+        setIsRunning(false);
+        setIsLoading(false);
+        setStatus('Erro ao iniciar.');
+        stopWarmup();
+        toast.error('Erro ao iniciar rastreamento.');
+      }
+
+      if (type === 'getUiStatus:ok') {
+        const { isRunning: running, status: crawlStatus } = payload || {};
+
+        if (crawlStatus) {
+          setVisited(crawlStatus.visited || 0);
+          setQueue(crawlStatus.queueLen || 0);
+          setWritten(crawlStatus.written || 0);
+          setExternalSkips(crawlStatus.externalSkips || 0);
+
+          if (crawlStatus.eta) {
+            setEta(`ETA ${crawlStatus.eta}`);
+          }
+        }
+
+        if (!running && isRunning) {
+          handleStop();
+        }
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, [isRunning]);
+
+  useEffect(() => {
+    if (isRunning) {
+      pollingIntervalRef.current = setInterval(() => {
+        window.parent.postMessage({ type: 'getUiStatus' }, "*");
+      }, 2000);
+    } else {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    }
+
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+    };
+  }, [isRunning]);
+
+  useEffect(() => {
     const total = Math.max(visited + queue, 1);
     const pct = Math.min(100, Math.round((visited / total) * 100));
     setProgressPercent(pct);
@@ -100,25 +163,18 @@ const Index = () => {
     setStatus('Iniciando');
     startWarmup();
 
-    // Simulate crawl process (in real app, this would call backend)
-    toast.success('Rastreamento iniciado!');
-    
-    // Simulate progress updates
-    setTimeout(() => {
-      setStatus('Rastreando');
-      setVisited(15);
-      setQueue(85);
-      setWritten(10);
-      setExternalSkips(3);
-    }, 3000);
+    window.parent.postMessage({
+      type: 'startCrawl',
+      payload: {
+        url: config.url,
+        maxDepth: config.maxDepth,
+        maxExternalDistinct: config.maxExternalDistinct,
+        excludeDomains: config.excludeDomains,
+        useOAuth2: config.useOAuth2
+      }
+    }, "*");
 
-    setTimeout(() => {
-      setVisited(45);
-      setQueue(120);
-      setWritten(35);
-      setExternalSkips(8);
-      setEta('ETA 5m 30s');
-    }, 10000);
+    toast.success('Rastreamento iniciado!');
   };
 
   const handleStop = () => {
@@ -126,6 +182,11 @@ const Index = () => {
     setIsLoading(false);
     setStatus('Parado pelo usuário.');
     stopWarmup();
+
+    window.parent.postMessage({
+      type: 'stopCrawl'
+    }, "*");
+
     toast.info('Rastreamento parado.');
   };
 
